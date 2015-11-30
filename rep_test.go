@@ -73,14 +73,14 @@ func TestEncodeDecode(t *testing.T) {
 
 func TestDecodeEncode(t *testing.T) {
 	for i := 0; i < 1000; i++ {
-		c := rand.Int31()
+		c := int32(rand.Int31())
 		d := encode(decode(c))
 		if d != c {
 			t.Errorf("DecodeEncode(%v) == %v, want %v", i, d, c)
 		}
 	}
 	for i := 0; i < 1000; i++ {
-		c := -rand.Int31()
+		c := -int32(rand.Int31())
 		d := encode(decode(c))
 		if d != c {
 			t.Errorf("DecodeEncode(%v) == %v, want %v", i, d, c)
