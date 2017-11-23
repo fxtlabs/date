@@ -7,7 +7,7 @@
 Package `date` provides functionality for working with dates.
 
 This package introduces a light-weight `Date` type that is storage-efficient
-and covenient for calendrical calculations and date parsing and formatting
+and convenient for calendrical calculations and date parsing and formatting
 (including years outside the [0,9999] interval).
 
 See [package documentation](https://godoc.org/github.com/fxtlabs/date) for
