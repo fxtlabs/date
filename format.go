@@ -6,9 +6,7 @@ package date
 
 import (
 	"fmt"
-	"regexp"
-	"strconv"
-	"time"
+	"strings"
 )
 
 // These are predefined layouts for use in Date.Format and Date.Parse.
@@ -30,60 +28,6 @@ const (
 	RFC1123W = "Mon, 02 Jan 2006" // RFC1123 with day of the week
 	RFC3339  = "2006-01-02"
 )
-
-// reISO8601 is the regular expression used to parse date strings in the
-// ISO 8601 extended format, with or without an expanded year representation.
-var reISO8601 = regexp.MustCompile(`^([-+]?\d{4,})-(\d{2})-(\d{2})$`)
-
-// ParseISO parses an ISO 8601 formatted string and returns the date value it represents.
-// In addition to the common extended format (e.g. 2006-01-02), this function
-// accepts date strings using the expanded year representation
-// with possibly extra year digits beyond the prescribed four-digit minimum
-// and with a + or - sign prefix (e.g. , "+12345-06-07", "-0987-06-05").
-//
-// Note that ParseISO is a little looser than the ISO 8601 standard and will
-// be happy to parse dates with a year longer than the four-digit minimum even
-// if they are missing the + sign prefix.
-//
-// Function Date.Parse can be used to parse date strings in other formats, but it
-// is currently not able to parse ISO 8601 formatted strings that use the
-// expanded year format.
-func ParseISO(value string) (Date, error) {
-	m := reISO8601.FindStringSubmatch(value)
-	if len(m) != 4 {
-		return Date{}, fmt.Errorf("Date.ParseISO: cannot parse %s", value)
-	}
-	// No need to check for errors since the regexp guarantees the matches
-	// are valid integers
-	year, _ := strconv.Atoi(m[1])
-	month, _ := strconv.Atoi(m[2])
-	day, _ := strconv.Atoi(m[3])
-
-	t := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.UTC)
-
-	return Date{encode(t)}, nil
-}
-
-// Parse parses a formatted string and returns the Date value it represents.
-// The layout defines the format by showing how the reference date, defined
-// to be
-//     Monday, Jan 2, 2006
-// would be interpreted if it were the value; it serves as an example of the
-// input format. The same interpretation will then be made to the input string.
-//
-// This function actually uses time.Parse to parse the input and can use any
-// layout accepted by time.Parse, but returns only the date part of the
-// parsed Time value.
-//
-// This function cannot currently parse ISO 8601 strings that use the expanded
-// year format; you should use Date.ParseISO to parse those strings correctly.
-func Parse(layout, value string) (Date, error) {
-	t, err := time.Parse(layout, value)
-	if err != nil {
-		return Date{0}, err
-	}
-	return Date{encode(t)}, nil
-}
 
 // String returns the time formatted in ISO 8601 extended format
 // (e.g. "2006-01-02").  If the year of the date falls outside the
@@ -128,9 +72,62 @@ func (d Date) FormatISO(yearDigits int) string {
 // layout accepted by time.Format by extending its date to a time at
 // 00:00:00.000 UTC.
 //
+// Additionally, it is able to insert the day-number suffix into the output string.
+// This is done by including "nd" in the format string, which will become
+//     Mon, Jan 2nd, 2006
+// For example, New Year's Day might be rendered as "Fri, Jan 1st, 2016". To alter
+// the suffix strings for a different locale, change DaySuffixes or use FormatWithSuffixes
+// instead.
+//
 // This function cannot currently format Date values according to the expanded
 // year variant of ISO 8601; you should use Date.FormatISO to that effect.
 func (d Date) Format(layout string) string {
+	return d.FormatWithSuffixes(layout, DaySuffixes)
+}
+
+// FormatWithSuffixes is the same as Format, except the suffix strings can be specified
+// explicitly, which allows multiple locales to be supported. The suffixes slice should
+// contain 31 strings covering the days 1 (index 0) to 31 (index 30).
+func (d Date) FormatWithSuffixes(layout string, suffixes []string) string {
 	t := decode(d.day)
-	return t.Format(layout)
+	parts := strings.Split(layout, "nd")
+	switch len(parts) {
+	case 1:
+		return t.Format(layout)
+
+	default:
+		// If the format contains "Monday", it has been split so repair it.
+		i := 1
+		for i < len(parts) {
+			if i > 0 && strings.HasSuffix(parts[i-1], "Mo") && strings.HasPrefix(parts[i], "ay") {
+				parts[i-1] = parts[i-1] + "nd" + parts[i]
+				copy(parts[i:], parts[i+1:])
+				parts = parts[:len(parts)-1]
+			} else {
+				i++
+			}
+		}
+		a := make([]string, 0, 2*len(parts)-1)
+		for i, p := range parts {
+			if i > 0 {
+				a = append(a, suffixes[d.Day()-1])
+			}
+			a = append(a, t.Format(p))
+		}
+		return strings.Join(a, "")
+	}
+}
+
+// DaySuffixes is the default array of strings used as suffixes when a format string
+// contains "nd" (as in "second"). This can be altered at startup in order to change
+// the default locale strings used for formatting dates. It supports every locale that
+// uses the Gregorian calendar and has a suffix after the day-of-month number.
+var DaySuffixes = []string{
+	"st", "nd", "rd", "th", "th", // 1 - 5
+	"th", "th", "th", "th", "th", // 6 - 10
+	"th", "th", "th", "th", "th", // 11 - 15
+	"th", "th", "th", "th", "th", // 16 - 20
+	"st", "nd", "rd", "th", "th", // 21 - 25
+	"th", "th", "th", "th", "th", // 26 - 30
+	"st", // 31
 }
