@@ -2,19 +2,17 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-package date_test
+package date
 
 import (
-	"bytes"
-	"encoding/gob"
-	"encoding/json"
+	"runtime/debug"
 	"testing"
 	"time"
 
-	"github.com/fxtlabs/date"
+	"github.com/rickb777/date/period"
 )
 
-func same(d date.Date, t time.Time) bool {
+func same(d Date, t time.Time) bool {
 	yd, wd := d.ISOWeek()
 	yt, wt := t.ISOWeek()
 	return d.Year() == t.Year() &&
@@ -25,7 +23,7 @@ func same(d date.Date, t time.Time) bool {
 		yd == yt && wd == wt
 }
 
-func TestNew(t *testing.T) {
+func TestDate_New(t *testing.T) {
 	cases := []string{
 		"0000-01-01T00:00:00+00:00",
 		"0001-01-01T00:00:00+00:00",
@@ -43,24 +41,67 @@ func TestNew(t *testing.T) {
 			t.Errorf("New(%v) cannot parse input: %v", c, err)
 			continue
 		}
-		dOut := date.New(tIn.Year(), tIn.Month(), tIn.Day())
+		dOut := New(tIn.Year(), tIn.Month(), tIn.Day())
 		if !same(dOut, tIn) {
 			t.Errorf("New(%v) == %v, want date of %v", c, dOut, tIn)
 		}
-		dOut = date.NewAt(tIn)
+		dOut = NewAt(tIn)
 		if !same(dOut, tIn) {
 			t.Errorf("NewAt(%v) == %v, want date of %v", c, dOut, tIn)
 		}
 	}
 }
 
-func TestToday(t *testing.T) {
-	today := date.Today()
+func Test_New_and_Add(t *testing.T) {
+	cases := []struct {
+		offset   PeriodOfDays
+		expected Date
+	}{
+		// For year Y, Julian date offset is
+		//     D = [Y/100] - [Y/400] - 2
+		{offset: -135140, expected: New(1600, time.January, 1)}, // 10 days Julian offset
+		{offset: -98615, expected: New(1700, time.January, 1)},  // 10 days Julian offset
+		{offset: -62091, expected: New(1800, time.January, 1)},
+		{offset: -365, expected: New(1969, time.January, 1)},
+		{offset: 0, expected: New(1970, time.January, 1)},
+		{offset: 365, expected: New(1971, time.January, 1)},
+		{offset: 36525, expected: New(2070, time.January, 1)},
+	}
+
+	zero := Date{}
+
+	for i, c := range cases {
+		d2 := zero.Add(c.offset)
+		if !d2.Equal(c.expected) {
+			t.Errorf("%d: %d gives %s, wanted %s", i, c.offset, d2, c.expected)
+		}
+	}
+}
+
+func TestDate_DaysSinceEpoch(t *testing.T) {
+	zero := Date{}.DaysSinceEpoch()
+	if zero != 0 {
+		t.Errorf("Non zero %v", zero)
+	}
+	today := Today()
+	days := today.DaysSinceEpoch()
+	copy1 := NewOfDays(days)
+	copy2 := days.Date()
+	if today != copy1 || days == 0 {
+		t.Errorf("Today == %v, want date of %v", today, copy1)
+	}
+	if today != copy2 || days == 0 {
+		t.Errorf("Today == %v, want date of %v", today, copy2)
+	}
+}
+
+func TestDate_Today(t *testing.T) {
+	today := Today()
 	now := time.Now()
 	if !same(today, now) {
 		t.Errorf("Today == %v, want date of %v", today, now)
 	}
-	today = date.TodayUTC()
+	today = TodayUTC()
 	now = time.Now().UTC()
 	if !same(today, now) {
 		t.Errorf("TodayUTC == %v, want date of %v", today, now)
@@ -68,7 +109,7 @@ func TestToday(t *testing.T) {
 	cases := []int{-10, -5, -3, 0, 1, 4, 8, 12}
 	for _, c := range cases {
 		location := time.FixedZone("zone", c*60*60)
-		today = date.TodayIn(location)
+		today = TodayIn(location)
 		now = time.Now().In(location)
 		if !same(today, now) {
 			t.Errorf("TodayIn(%v) == %v, want date of %v", c, today, now)
@@ -76,24 +117,22 @@ func TestToday(t *testing.T) {
 	}
 }
 
-func TestTime(t *testing.T) {
+func TestDate_Time(t *testing.T) {
 	cases := []struct {
-		year  int
-		month time.Month
-		day   int
+		d Date
 	}{
-		{-1234, time.February, 5},
-		{0, time.April, 12},
-		{1, time.January, 1},
-		{1946, time.February, 4},
-		{1970, time.January, 1},
-		{1976, time.April, 1},
-		{1999, time.December, 1},
-		{1111111, time.June, 21},
+		{New(-1234, time.February, 5)},
+		{New(0, time.April, 12)},
+		{New(1, time.January, 1)},
+		{New(1946, time.February, 4)},
+		{New(1970, time.January, 1)},
+		{New(1976, time.April, 1)},
+		{New(1999, time.December, 1)},
+		{New(1111111, time.June, 21)},
 	}
 	zones := []int{-12, -10, -5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5, 8, 12}
 	for _, c := range cases {
-		d := date.New(c.year, c.month, c.day)
+		d := c.d
 		tUTC := d.UTC()
 		if !same(d, tUTC) {
 			t.Errorf("TimeUTC(%v) == %v, want date part %v", d, tUTC, d)
@@ -124,232 +163,185 @@ func TestTime(t *testing.T) {
 func TestPredicates(t *testing.T) {
 	// The list of case dates must be sorted in ascending order
 	cases := []struct {
-		year  int
-		month time.Month
-		day   int
+		d Date
 	}{
-		{-1234, time.February, 5},
-		{0, time.April, 12},
-		{1, time.January, 1},
-		{1946, time.February, 4},
-		{1970, time.January, 1},
-		{1976, time.April, 1},
-		{1999, time.December, 1},
-		{1111111, time.June, 21},
+		{New(-1234, time.February, 5)},
+		{New(0, time.April, 12)},
+		{New(1, time.January, 1)},
+		{New(1946, time.February, 4)},
+		{New(1970, time.January, 1)},
+		{New(1976, time.April, 1)},
+		{New(1999, time.December, 1)},
+		{New(1111111, time.June, 21)},
 	}
 	for i, ci := range cases {
-		di := date.New(ci.year, ci.month, ci.day)
+		di := ci.d
 		for j, cj := range cases {
-			dj := date.New(cj.year, cj.month, cj.day)
-			p := di.Equal(dj)
-			q := i == j
-			if p != q {
-				t.Errorf("Equal(%v, %v) == %v, want %v", di, dj, p, q)
-			}
-			p = di.Before(dj)
-			q = i < j
-			if p != q {
-				t.Errorf("Before(%v, %v) == %v, want %v", di, dj, p, q)
-			}
-			p = di.After(dj)
-			q = i > j
-			if p != q {
-				t.Errorf("After(%v, %v) == %v, want %v", di, dj, p, q)
-			}
-			p = di == dj
-			q = i == j
-			if p != q {
-				t.Errorf("Equal(%v, %v) == %v, want %v", di, dj, p, q)
-			}
-			p = di != dj
-			q = i != j
-			if p != q {
-				t.Errorf("Equal(%v, %v) == %v, want %v", di, dj, p, q)
-			}
+			dj := cj.d
+			testPredicate(t, di, dj, di.Equal(dj), i == j, "Equal")
+			testPredicate(t, di, dj, di.Before(dj), i < j, "Before")
+			testPredicate(t, di, dj, di.After(dj), i > j, "After")
+			testPredicate(t, di, dj, di == dj, i == j, "==")
+			testPredicate(t, di, dj, di != dj, i != j, "!=")
 		}
 	}
 
 	// Test IsZero
-	zero := date.Date{}
+	zero := Date{}
 	if !zero.IsZero() {
 		t.Errorf("IsZero(%v) == false, want true", zero)
 	}
-	today := date.Today()
+	today := Today()
 	if today.IsZero() {
 		t.Errorf("IsZero(%v) == true, want false", today)
 	}
 }
 
+func testPredicate(t *testing.T, di, dj Date, p, q bool, m string) {
+	if p != q {
+		t.Errorf("%s(%v, %v) == %v, want %v\n%v", m, di, dj, p, q, debug.Stack())
+	}
+}
+
 func TestArithmetic(t *testing.T) {
-	cases := []struct {
-		year  int
-		month time.Month
-		day   int
-	}{
-		{-1234, time.February, 5},
-		{0, time.April, 12},
-		{1, time.January, 1},
-		{1946, time.February, 4},
-		{1970, time.January, 1},
-		{1976, time.April, 1},
-		{1999, time.December, 1},
-		{1111111, time.June, 21},
+	dates := []Date{
+		New(-1234, time.February, 5),
+		New(0, time.April, 12),
+		New(1, time.January, 1),
+		New(1946, time.February, 4),
+		New(1970, time.January, 1),
+		New(1976, time.April, 1),
+		New(1999, time.December, 1),
+		New(1111111, time.June, 21),
 	}
-	offsets := []int{-1000000, -9999, -555, -99, -22, -1, 0, 1, 22, 99, 555, 9999, 1000000}
-	for _, c := range cases {
-		d := date.New(c.year, c.month, c.day)
+
+	offsets := []PeriodOfDays{-1000000, -9999, -555, -99, -22, -1, 0, 1, 22, 99, 555, 9999, 1000000}
+
+	for _, d := range dates {
+		di := d
 		for _, days := range offsets {
-			d2 := d.Add(days)
-			days2 := d2.Sub(d)
+			dj := di.Add(days)
+			days2 := dj.Sub(di)
 			if days2 != days {
-				t.Errorf("AddSub(%v,%v) == %v, want %v", d, days, days2, days)
+				t.Errorf("AddSub(%v,%v) == %v, want %v", di, days, days2, days)
 			}
-			d3 := d2.Add(-days)
-			if d3 != d {
-				t.Errorf("AddNeg(%v,%v) == %v, want %v", d, days, d3, d)
+			d3 := dj.Add(-days)
+			if d3 != di {
+				t.Errorf("AddNeg(%v,%v) == %v, want %v", di, days, d3, di)
 			}
-		}
-	}
-}
-
-func TestGobEncoding(t *testing.T) {
-	var b bytes.Buffer
-	encoder := gob.NewEncoder(&b)
-	decoder := gob.NewDecoder(&b)
-	cases := []date.Date{
-		date.New(-11111, time.February, 3),
-		date.New(-1, time.December, 31),
-		date.New(0, time.January, 1),
-		date.New(1, time.January, 1),
-		date.New(1970, time.January, 1),
-		date.New(2012, time.June, 25),
-		date.New(12345, time.June, 7),
-	}
-	for _, c := range cases {
-		var d date.Date
-		err := encoder.Encode(&c)
-		if err != nil {
-			t.Errorf("Gob(%v) encode error %v", c, err)
-		} else {
-			err = decoder.Decode(&d)
-			if err != nil {
-				t.Errorf("Gob(%v) decode error %v", c, err)
+			eMin1 := min(di.day, dj.day)
+			aMin1 := di.Min(dj)
+			if aMin1.day != eMin1 {
+				t.Errorf("%v.Max(%v) is %s", di, dj, aMin1)
+			}
+			eMax1 := max(di.day, dj.day)
+			aMax1 := di.Max(dj)
+			if aMax1.day != eMax1 {
+				t.Errorf("%v.Max(%v) is %s", di, dj, aMax1)
 			}
 		}
 	}
 }
 
-func TestInvalidGob(t *testing.T) {
+func TestDate_AddDate(t *testing.T) {
 	cases := []struct {
-		bytes []byte
-		want  string
+		d                   Date
+		years, months, days int
+		expected            Date
 	}{
-		{[]byte{}, "Date.UnmarshalBinary: no data"},
-		{[]byte{1, 2, 3}, "Date.UnmarshalBinary: invalid length"},
+		{New(1970, time.January, 1), 1, 2, 3, New(1971, time.March, 4)},
+		{New(1999, time.September, 28), 6, 4, 2, New(2006, time.January, 30)},
+		{New(1999, time.September, 28), 0, 0, 3, New(1999, time.October, 1)},
+		{New(1999, time.September, 28), 0, 1, 3, New(1999, time.October, 31)},
 	}
 	for _, c := range cases {
-		var ignored date.Date
-		err := ignored.GobDecode(c.bytes)
-		if err == nil || err.Error() != c.want {
-			t.Errorf("InvalidGobDecode(%v) == %v, want %v", c.bytes, err, c.want)
+		di := c.d
+		dj := di.AddDate(c.years, c.months, c.days)
+		if dj != c.expected {
+			t.Errorf("%v AddDate(%v,%v,%v) == %v, want %v", di, c.years, c.months, c.days, dj, c.expected)
 		}
-		err = ignored.UnmarshalBinary(c.bytes)
-		if err == nil || err.Error() != c.want {
-			t.Errorf("InvalidUnmarshalBinary(%v) == %v, want %v", c.bytes, err, c.want)
-		}
-	}
-}
-
-func TestJSONMarshalling(t *testing.T) {
-	var d date.Date
-	cases := []struct {
-		value date.Date
-		want  string
-	}{
-		{date.New(-11111, time.February, 3), `"-11111-02-03"`},
-		{date.New(-1, time.December, 31), `"-0001-12-31"`},
-		{date.New(0, time.January, 1), `"0000-01-01"`},
-		{date.New(1, time.January, 1), `"0001-01-01"`},
-		{date.New(1970, time.January, 1), `"1970-01-01"`},
-		{date.New(2012, time.June, 25), `"2012-06-25"`},
-		{date.New(12345, time.June, 7), `"+12345-06-07"`},
-	}
-	for _, c := range cases {
-		bytes, err := json.Marshal(c.value)
-		if err != nil {
-			t.Errorf("JSON(%v) marshal error %v", c, err)
-		} else if string(bytes) != c.want {
-			t.Errorf("JSON(%v) == %v, want %v", c.value, string(bytes), c.want)
-		} else {
-			err = json.Unmarshal(bytes, &d)
-			if err != nil {
-				t.Errorf("JSON(%v) unmarshal error %v", c.value, err)
-			}
+		dk := dj.AddDate(-c.years, -c.months, -c.days)
+		if dk != di {
+			t.Errorf("%v AddDate(%v,%v,%v) == %v, want %v", dj, -c.years, -c.months, -c.days, dk, di)
 		}
 	}
 }
 
-func TestInvalidJSON(t *testing.T) {
+func TestDate_AddPeriod(t *testing.T) {
 	cases := []struct {
-		value string
-		want  string
+		in       Date
+		delta    period.Period
+		expected Date
 	}{
-		{`"not-a-date"`, `Date.ParseISO: cannot parse not-a-date`},
-		{`2015-08-15"`, `Date.UnmarshalJSON: missing double quotes (2015-08-15")`},
-		{`"2015-08-15`, `Date.UnmarshalJSON: missing double quotes ("2015-08-15)`},
-		{`"215-08-15"`, `Date.ParseISO: cannot parse 215-08-15`},
+		{New(1970, time.January, 1), period.NewYMD(0, 0, 0), New(1970, time.January, 1)},
+		{New(1971, time.January, 1), period.NewYMD(10, 0, 0), New(1981, time.January, 1)},
+		{New(1972, time.January, 1), period.NewYMD(0, 10, 0), New(1972, time.November, 1)},
+		{New(1972, time.January, 1), period.NewYMD(0, 24, 0), New(1974, time.January, 1)},
+		{New(1973, time.January, 1), period.NewYMD(0, 0, 10), New(1973, time.January, 11)},
+		{New(1973, time.January, 1), period.NewYMD(0, 0, 365), New(1974, time.January, 1)},
+		{New(1974, time.January, 1), period.NewHMS(1, 2, 3), New(1974, time.January, 1)},
+		// note: the period is not normalised so the HMS is ignored even though it's more than one day
+		{New(1975, time.January, 1), period.NewHMS(24, 2, 3), New(1975, time.January, 1)},
 	}
-	for _, c := range cases {
-		var d date.Date
-		err := d.UnmarshalJSON([]byte(c.value))
-		if err == nil || err.Error() != c.want {
-			t.Errorf("InvalidJSON(%v) == %v, want %v", c.value, err, c.want)
+	for i, c := range cases {
+		out := c.in.AddPeriod(c.delta)
+		if out != c.expected {
+			t.Errorf("%d: %v.AddPeriod(%v) == %v, want %v", i, c.in, c.delta, out, c.expected)
 		}
 	}
 }
 
-func TestTextMarshalling(t *testing.T) {
-	var d date.Date
+func min(a, b PeriodOfDays) PeriodOfDays {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func max(a, b PeriodOfDays) PeriodOfDays {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// See main testin in period_test.go
+func TestIsLeap(t *testing.T) {
 	cases := []struct {
-		value date.Date
-		want  string
+		year     int
+		expected bool
 	}{
-		{date.New(-11111, time.February, 3), "-11111-02-03"},
-		{date.New(-1, time.December, 31), "-0001-12-31"},
-		{date.New(0, time.January, 1), "0000-01-01"},
-		{date.New(1, time.January, 1), "0001-01-01"},
-		{date.New(1970, time.January, 1), "1970-01-01"},
-		{date.New(2012, time.June, 25), "2012-06-25"},
-		{date.New(12345, time.June, 7), "+12345-06-07"},
+		{2000, true},
+		{2001, false},
 	}
 	for _, c := range cases {
-		bytes, err := c.value.MarshalText()
-		if err != nil {
-			t.Errorf("Text(%v) marshal error %v", c, err)
-		} else if string(bytes) != c.want {
-			t.Errorf("Text(%v) == %v, want %v", c.value, string(bytes), c.want)
-		} else {
-			err = d.UnmarshalText(bytes)
-			if err != nil {
-				t.Errorf("Text(%v) unmarshal error %v", c.value, err)
-			}
+		got := IsLeap(c.year)
+		if got != c.expected {
+			t.Errorf("TestIsLeap(%d) == %v, want %v", c.year, got, c.expected)
 		}
 	}
 }
 
-func TestInvalidText(t *testing.T) {
+func TestDaysIn(t *testing.T) {
 	cases := []struct {
-		value string
-		want  string
+		year     int
+		month    time.Month
+		expected int
 	}{
-		{`not-a-date`, `Date.ParseISO: cannot parse not-a-date`},
-		{`215-08-15`, `Date.ParseISO: cannot parse 215-08-15`},
+		{2000, time.January, 31},
+		{2000, time.February, 29},
+		{2001, time.February, 28},
+		{2001, time.April, 30},
 	}
 	for _, c := range cases {
-		var d date.Date
-		err := d.UnmarshalText([]byte(c.value))
-		if err == nil || err.Error() != c.want {
-			t.Errorf("InvalidText(%v) == %v, want %v", c.value, err, c.want)
+		got1 := DaysIn(c.year, c.month)
+		if got1 != c.expected {
+			t.Errorf("DaysIn(%d, %d) == %v, want %v", c.year, c.month, got1, c.expected)
+		}
+		d := New(c.year, c.month, 1)
+		got2 := d.LastDayOfMonth()
+		if got2 != c.expected {
+			t.Errorf("DaysIn(%d) == %v, want %v", c.year, got2, c.expected)
 		}
 	}
 }

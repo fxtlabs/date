@@ -2,49 +2,24 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-// Package date provides functionality for working with dates.
-//
-// This package introduces a light-weight Date type that is storage-efficient
-// and covenient for calendrical calculations and date parsing and formatting
-// (including years outside the [0,9999] interval).
-//
-// Credits
-//
-// This package follows very closely the design of package time
-// (http://golang.org/pkg/time/) in the standard library, many of the Date
-// methods are implemented using the corresponding methods of the time.Time
-// type, and much of the documentation is copied directly from that package.
-//
-// References
-//
-// https://golang.org/src/time/time.go
-//
-// https://en.wikipedia.org/wiki/Gregorian_calendar
-//
-// https://en.wikipedia.org/wiki/Proleptic_Gregorian_calendar
-//
-// https://en.wikipedia.org/wiki/Astronomical_year_numbering
-//
-// https://en.wikipedia.org/wiki/ISO_8601
-//
-// https://tools.ietf.org/html/rfc822
-//
-// https://tools.ietf.org/html/rfc850
-//
-// https://tools.ietf.org/html/rfc1123
-//
-// https://tools.ietf.org/html/rfc3339
-//
 package date
 
 import (
-	"errors"
-	"fmt"
 	"math"
 	"time"
+
+	"github.com/rickb777/date/gregorian"
+	"github.com/rickb777/date/period"
 )
 
-// A Date represents a date under the (proleptic) Gregorian calendar as
+// PeriodOfDays describes a period of time measured in whole days. Negative values
+// indicate days earlier than some mark.
+type PeriodOfDays int32
+
+// ZeroDays is the named zero value for PeriodOfDays.
+const ZeroDays PeriodOfDays = 0
+
+// A Date represents a date under the proleptic Gregorian calendar as
 // used by ISO 8601. This calendar uses astronomical year numbering,
 // so it includes a year 0 and represents earlier years as negative numbers
 // (i.e. year 0 is 1 BC; year -1 is 2 BC, and so on).
@@ -55,22 +30,26 @@ import (
 //
 // Programs using dates should typically store and pass them as values,
 // not pointers.  That is, date variables and struct fields should be of
-// type date.Date, not *date.Date.  A Date value can be used by
-// multiple goroutines simultaneously.
+// type date.Date, not *date.Date unless the pointer indicates an optional
+// value.  A Date value can be used by multiple goroutines simultaneously.
 //
 // Date values can be compared using the Before, After, and Equal methods
 // as well as the == and != operators.
+//
 // The Sub method subtracts two dates, returning the number of days between
-// them.
-// The Add method adds a Date and a number of days, producing a Date.
+// them. The Add method adds a Date and a number of days, producing a Date.
 //
-// The zero value of type Date is Thursday, January 1, 1970.
-// As this date is unlikely to come up in practice, the IsZero method gives
-// a simple way of detecting a date that has not been initialized explicitly.
+// The zero value of type Date is Thursday, January 1, 1970 (called 'the
+// epoch'), based on Unix convention. The IsZero method gives a simple way
+// of detecting a date that has not been initialized explicitly, with the
+// caveat that this is also a 'normal' date.
 //
+// The first official date of the Gregorian calendar was Friday, October 15th
+// 1582, quite unrelated to the epoch used here. The Date type does not
+// distinguish between official Gregorian dates and earlier proleptic dates,
+// which can also be represented when needed.
 type Date struct {
-	// day gives the number of days elapsed since date zero.
-	day int32
+	day PeriodOfDays // day gives the number of days elapsed since date zero.
 }
 
 // New returns the Date value corresponding to the given year, month, and day.
@@ -87,6 +66,18 @@ func New(year int, month time.Month, day int) Date {
 // the given Time value.
 func NewAt(t time.Time) Date {
 	return Date{encode(t)}
+}
+
+// NewOfDays returns the Date value corresponding to the given period since the
+// epoch (1st January 1970), which may be negative.
+func NewOfDays(p PeriodOfDays) Date {
+	return Date{p}
+}
+
+// Date returns the Date value corresponding to the given period since the
+// epoch (1st January 1970), which may be negative.
+func (p PeriodOfDays) Date() Date {
+	return Date{p}
 }
 
 // Today returns today's date according to the current local time.
@@ -110,12 +101,12 @@ func TodayIn(loc *time.Location) Date {
 
 // Min returns the smallest representable date.
 func Min() Date {
-	return Date{math.MinInt32}
+	return Date{day: PeriodOfDays(math.MinInt32)}
 }
 
 // Max returns the largest representable date.
 func Max() Date {
-	return Date{math.MaxInt32}
+	return Date{day: PeriodOfDays(math.MaxInt32)}
 }
 
 // UTC returns a Time value corresponding to midnight on the given date,
@@ -140,9 +131,17 @@ func (d Date) In(loc *time.Location) time.Time {
 }
 
 // Date returns the year, month, and day of d.
+// The first day of the month is 1.
 func (d Date) Date() (year int, month time.Month, day int) {
 	t := decode(d.day)
 	return t.Date()
+}
+
+// LastDayOfMonth returns the last day of the month specified by d.
+// The first day of the month is 1.
+func (d Date) LastDayOfMonth() int {
+	y, m, _ := d.Date()
+	return DaysIn(y, m)
 }
 
 // Day returns the day of the month specified by d.
@@ -176,7 +175,7 @@ func (d Date) Weekday() time.Weekday {
 	// Date zero, January 1, 1970, fell on a Thursday
 	wdayZero := time.Thursday
 	// Taking into account potential for overflow and negative offset
-	return time.Weekday((int32(wdayZero) + d.day%7 + 7) % 7)
+	return time.Weekday((int32(wdayZero) + int32(d.day)%7 + 7) % 7)
 }
 
 // ISOWeek returns the ISO 8601 year and week number in which d occurs.
@@ -188,7 +187,9 @@ func (d Date) ISOWeek() (year, week int) {
 	return t.ISOWeek()
 }
 
-// IsZero reports whether t represents the zero date.
+// IsZero reports whether d represents the zero (i.e. uninitialised) date.
+// Because Date follows Unix conventions, it is based on 1970-01-01. So be
+// careful with this: the corresponding 1970-01-01 date is not itself a 'zero'.
 func (d Date) IsZero() bool {
 	return d.day == 0
 }
@@ -208,109 +209,76 @@ func (d Date) After(u Date) bool {
 	return d.day > u.day
 }
 
-// Add returns the date d plus the given number of days.
-func (d Date) Add(days int) Date {
-	return Date{d.day + int32(days)}
+// Min returns the earlier of two dates.
+func (d Date) Min(u Date) Date {
+	if d.day > u.day {
+		return u
+	}
+	return d
+}
+
+// Max returns the later of two dates.
+func (d Date) Max(u Date) Date {
+	if d.day < u.day {
+		return u
+	}
+	return d
+}
+
+// Add returns the date d plus the given number of days. The parameter may be negative.
+func (d Date) Add(days PeriodOfDays) Date {
+	return Date{d.day + days}
 }
 
 // AddDate returns the date corresponding to adding the given number of years,
 // months, and days to d. For example, AddData(-1, 2, 3) applied to
 // January 1, 2011 returns March 4, 2010.
+//
+// AddDate normalizes its result in the same way that Date does,
+// so, for example, adding one month to October 31 yields
+// December 1, the normalized form for November 31.
+//
+// The addition of all fields is performed before normalisation of any; this can affect
+// the result. For example, adding 0y 1m 3d to September 28 gives October 31 (not
+// November 1).
 func (d Date) AddDate(years, months, days int) Date {
-	t := decode(d.day)
-	t = t.AddDate(years, months, days)
+	t := decode(d.day).AddDate(years, months, days)
 	return Date{encode(t)}
 }
 
+// AddPeriod returns the date corresponding to adding the given period. If the
+// period's fields are be negative, this results in an earlier date.
+//
+// Any time component is ignored. Therefore, be careful with periods containing
+// more that 24 hours in the hours/minutes/seconds fields. These will not be
+// normalised for you; if you want this behaviour, call delta.Normalise(false)
+// on the input parameter.
+//
+// For example, PT24H adds nothing, whereas P1D adds one day as expected. To
+// convert a period such as PT24H to its equivalent P1D, use
+// delta.Normalise(false) as the input.
+//
+// See the description for AddDate.
+func (d Date) AddPeriod(delta period.Period) Date {
+	return d.AddDate(delta.Years(), delta.Months(), delta.Days())
+}
+
 // Sub returns d-u as the number of days between the two dates.
-func (d Date) Sub(u Date) (days int) {
-	return int(d.day - u.day)
+func (d Date) Sub(u Date) (days PeriodOfDays) {
+	return d.day - u.day
 }
 
-// MarshalBinary implements the encoding.BinaryMarshaler interface.
-func (d Date) MarshalBinary() ([]byte, error) {
-	enc := []byte{
-		byte(d.day >> 24),
-		byte(d.day >> 16),
-		byte(d.day >> 8),
-		byte(d.day),
-	}
-	return enc, nil
+// DaysSinceEpoch returns the number of days since the epoch (1st January 1970), which may be negative.
+func (d Date) DaysSinceEpoch() (days PeriodOfDays) {
+	return d.day
 }
 
-// UnmarshalBinary implements the encoding.BinaryUnmarshaler interface.
-func (d *Date) UnmarshalBinary(data []byte) error {
-	if len(data) == 0 {
-		return errors.New("Date.UnmarshalBinary: no data")
-	}
-	if len(data) != 4 {
-		return errors.New("Date.UnmarshalBinary: invalid length")
-	}
-
-	d.day = int32(data[3]) | int32(data[2])<<8 | int32(data[1])<<16 | int32(data[0])<<24
-
-	return nil
+// IsLeap simply tests whether a given year is a leap year, using the proleptic Gregorian calendar algorithm.
+func IsLeap(year int) bool {
+	return gregorian.IsLeap(year)
 }
 
-// GobEncode implements the gob.GobEncoder interface.
-func (d Date) GobEncode() ([]byte, error) {
-	return d.MarshalBinary()
-}
-
-// GobDecode implements the gob.GobDecoder interface.
-func (d *Date) GobDecode(data []byte) error {
-	return d.UnmarshalBinary(data)
-}
-
-// MarshalJSON implements the json.Marshaler interface.
-// The date is a quoted string in ISO 8601 extended format (e.g. "2006-01-02").
-// If the year of the date falls outside the [0,9999] range, this format
-// produces an expanded year representation with possibly extra year digits
-// beyond the prescribed four-digit minimum and with a + or - sign prefix
-// (e.g. , "+12345-06-07", "-0987-06-05").
-func (d Date) MarshalJSON() ([]byte, error) {
-	return []byte(`"` + d.String() + `"`), nil
-}
-
-// UnmarshalJSON implements the json.Unmarshaler interface.
-// The date is expected to be a quoted string in ISO 8601 extended format
-// (e.g. "2006-01-02", "+12345-06-07", "-0987-06-05");
-// the year must use at least 4 digits and if outside the [0,9999] range
-// must be prefixed with a + or - sign.
-func (d *Date) UnmarshalJSON(data []byte) (err error) {
-	value := string(data)
-	n := len(value)
-	if n < 2 || value[0] != '"' || value[n-1] != '"' {
-		return fmt.Errorf("Date.UnmarshalJSON: missing double quotes (%s)", value)
-	}
-	u, err := ParseISO(value[1 : n-1])
-	if err != nil {
-		return err
-	}
-	d.day = u.day
-	return nil
-}
-
-// MarshalText implements the encoding.TextMarshaler interface.
-// The date is given in ISO 8601 extended format (e.g. "2006-01-02").
-// If the year of the date falls outside the [0,9999] range, this format
-// produces an expanded year representation with possibly extra year digits
-// beyond the prescribed four-digit minimum and with a + or - sign prefix
-// (e.g. , "+12345-06-07", "-0987-06-05").
-func (d Date) MarshalText() ([]byte, error) {
-	return []byte(d.String()), nil
-}
-
-// UnmarshalText implements the encoding.TextUnmarshaler interface.
-// The date is expected to be in ISO 8601 extended format
-// (e.g. "2006-01-02", "+12345-06-07", "-0987-06-05");
-// the year must use at least 4 digits and if outside the [0,9999] range
-// must be prefixed with a + or - sign.
-func (d *Date) UnmarshalText(data []byte) error {
-	u, err := ParseISO(string(data))
-	if err != nil {
-		return err
-	}
-	d.day = u.day
-	return nil
+// DaysIn gives the number of days in a given month, according to the proleptic Gregorian calendar.
+func DaysIn(year int, month time.Month) int {
+	return gregorian.DaysIn(year, month)
 }
